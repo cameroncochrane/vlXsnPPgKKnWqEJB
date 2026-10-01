@@ -1,3 +1,9 @@
+# .github folder containing instructions for github copilot
+.github
+
+# Data
+data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
