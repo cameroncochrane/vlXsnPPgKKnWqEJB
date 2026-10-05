@@ -1,0 +1,1 @@
+src folder for the volatility modelling side of the project (based on the experimentation carried out in the volatility_notebooks directory)
