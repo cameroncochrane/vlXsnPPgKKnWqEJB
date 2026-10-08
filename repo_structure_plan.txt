@@ -1,0 +1,26 @@
+btc-agent/
+│
+├── app.py                   # Streamlit frontend
+├── main.py                  # 24/7 trading process
+│
+├── src/
+│   ├── market_data.py
+│   ├── features.py
+│   ├── predictions.py
+│   ├── llm_agent.py
+│   ├── portfolio.py
+│   └── telegram.py
+│
+├── models/
+│   ├── direction_model.pkl
+│   └── volatility_model.keras
+│
+├── state/
+│   └── portfolio.db
+│
+├── .streamlit/
+│   └── config.toml
+│
+├── requirements.txt
+├── .env
+└── .gitignore
