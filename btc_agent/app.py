@@ -2,6 +2,14 @@
 
 import streamlit as st
 
-st.title('Bitcoin Trading Agent')
 
-st.text('Development Stage')
+def main():
+
+    st.title('Bitcoin Trading Agent')
+
+    st.text('Development Stage')
+    
+
+
+if __name__ == "__main__":
+    main()
