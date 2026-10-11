@@ -17,6 +17,8 @@ btc-agent/
 │
 ├── state/
 │   └── portfolio.db
+│   └── trades.db
+│   └── LLM_history.db (or .txt / .pkl?)
 │
 ├── .streamlit/
 │   └── config.toml
