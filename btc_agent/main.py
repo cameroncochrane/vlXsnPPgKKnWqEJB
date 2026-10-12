@@ -9,11 +9,15 @@ def main():
         fetch_live_BTCUSD()
         return None
 
-    def check_potfolio():
+    current_price = return_price()
+
+    def update_potfolio(current_price):
         
         return None
 
-    def ask_agent_portfolio(portfolio):
+    current_portfolio = update_potfolio(current_price)
+
+    def ask_agent_portfolio(current_portfolio):
 
         return None
 
