@@ -3,6 +3,10 @@ import base64
 import json
 from google.oauth2 import service_account
 
+# Things to put in the sheet:
+# - 
+
+
 # Google Sheet: https://docs.google.com/spreadsheets/d/16xCo6fEscpNHEAqC9uXQjQrdUBlwZ_-LUEtPkIyTcPU/edit?gid=0#gid=0 
 
 # Decode the Base64 environment variable (as the credentials are a json)

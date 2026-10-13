@@ -15,7 +15,7 @@ def main():
 	while True:
 		time.sleep(CHECK_INTERVAL_SECONDS)  # Check the time every 60 seconds.
 		current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
-		if current_hour != last_hour:
+		if current_hour != last_hour: # When a new hour is reached 'main.py' is run.
 			last_hour = current_hour
 			subprocess.Popen(
 				[sys.executable, str(script_dir / "main.py")], # Invoke main.py here

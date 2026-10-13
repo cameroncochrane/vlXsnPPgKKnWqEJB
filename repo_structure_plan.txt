@@ -15,10 +15,9 @@ btc-agent/
 │   ├── direction_model.pkl
 │   └── volatility_model.keras
 │
-├── state/
-│   └── portfolio.db
-│   └── trades.db
-│   └── LLM_history.db (or .txt / .pkl?)
+├── databases/
+│   └── trading.db
+│   └── agent_log.db (or .txt / .pkl?)
 │
 ├── .streamlit/
 │   └── config.toml
