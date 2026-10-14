@@ -79,6 +79,18 @@ def create_tables(engine: sqlalchemy.Engine) -> None:
     metadata.create_all(engine)
 
 
+def fetch_table_data(engine: sqlalchemy.Engine, table: sqlalchemy.Table) -> list[dict[str, object]]:
+    """Return all rows from ``table`` as dictionaries keyed by column name.
+
+    Example:
+        >>> portfolio_data = fetch_table_data(engine, portfolio_table)
+        >>> process_portfolio(portfolio_data)
+    """
+    with engine.connect() as connection:
+        rows = connection.execute(sqlalchemy.select(table)).mappings()
+        return [dict(row) for row in rows]
+
+
 def print_engine_info(engine: Engine) -> None:
     """Print connection details and the schema discovered through ``engine``.
 
@@ -189,3 +201,5 @@ def remove_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping
             raise LookupError(
                 f"No row found in {table.name} with {primary_key}={data[primary_key]!r}"
             )
+
+
