@@ -6,6 +6,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from src.notification import send_email
+
 CHECK_INTERVAL_SECONDS = 60
 
 def main():
@@ -17,11 +19,14 @@ def main():
 		current_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
 		if current_hour != last_hour: # When a new hour is reached 'main.py' is run.
 			last_hour = current_hour
+			if current_hour.weekday() == 0 and current_hour.hour == 9:
+				send_email() # Send portfolio update via email @ 9:00am every Monday
 			subprocess.Popen(
 				[sys.executable, str(script_dir / "main.py")], # Invoke main.py here
 				cwd=script_dir,
 			)
 
-
+	
+	
 if __name__ == "__main__":
 	main()

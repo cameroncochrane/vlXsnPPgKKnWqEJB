@@ -1,9 +1,13 @@
 # Backend which orchestrates the overall agent. It is run every hour, being invoked according to timer logic in 'timer.py' (this directory)
 
+from datetime import datetime
+
 from src.price_data import fetch_live_BTCUSD, fetch_historical_BTCUSD
 from src.news import fetch_news_articles
 from src.agent import run_agent
 from src.database.database import create_database, modify_row, fetch_table_data, portfolio_table, trades_table
+from src.notification import send_email
+
 
 def main():
 
@@ -58,6 +62,8 @@ def main():
 
     agent_summary = ask_agent_portfolio(current_price, three_month_data, current_portfolio, predictions, news)
     print(agent_summary)
+
+    
 
 
 

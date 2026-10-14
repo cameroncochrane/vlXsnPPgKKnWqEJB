@@ -135,6 +135,7 @@ what ids have been used before.
 
 - Don't hallucinate the current price. Use the BTC price provided explicitly to you.
 
+
 - When you receive historical data it will be for the last 60 days. Feel free to use this data to calculate indicators such as MACD and EMA to help you with your decision.
 
 

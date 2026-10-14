@@ -2,7 +2,7 @@ btc-agent/
 │
 ├── app.py                   # Streamlit frontend
 ├── main.py                  # 24/7 trading process (once per hour)
-├── timer.py                 # Execute main.py once per hour
+├── timer.py                 # Execute main.py once per hour. Also sends email weekly (Mon@ 9:00am)
 │
 ├── src/
 │   ├── price_data.py
