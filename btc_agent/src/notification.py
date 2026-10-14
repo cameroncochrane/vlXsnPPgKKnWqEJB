@@ -26,6 +26,10 @@ if not TELEGRAM_TOKEN:
 chat_id = 8958267173 
 
 def send_telegram_message(chat_id, message):
+    """
+    Send Telegram notification.
+    (To be used after each trade execuition with details of the trade)
+    """
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -43,6 +47,10 @@ MAILTRAP_API_TOKEN = os.getenv("MAILTRAP_API_TOKEN")
 
 
 def send_email(subject, message, recipient_email="cochranecameron1@gmail.com"):
+    """
+    Send email notification
+    (To be used to send a weekly email with a summary of the portfolio, the positions, and the trades executed that week)
+    """
     if not MAILTRAP_API_TOKEN:
         raise RuntimeError("MAILTRAP_API_TOKEN environment variable is not set.")
 
@@ -91,8 +99,9 @@ def send_email(subject, message, recipient_email="cochranecameron1@gmail.com"):
     return client.send(mail)
 
 
-send_email(
-    subject="Mailtrap Test 2",
-    message="I'm sorry I still can't do that Dave",
-    recipient_email="cochranecameron1@gmail.com",
-)
+if __name__ == "__main__":
+    send_email(
+        subject="Mailtrap Test 2",
+        message="I'm sorry I still can't do that Dave",
+        recipient_email="cochranecameron1@gmail.com",
+    )

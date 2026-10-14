@@ -18,18 +18,19 @@ metadata = sqlalchemy.MetaData()
 portfolio_table = sqlalchemy.Table( # These can be imported by another script
     "portfolio",
     metadata,
-    sqlalchemy.Column("position_id", sqlalchemy.Integer, primary_key=True),
+    sqlalchemy.Column("position_id", sqlalchemy.String, primary_key=True),
     sqlalchemy.Column("btc_amnt", sqlalchemy.Float, nullable=False),
     sqlalchemy.Column("open_price", sqlalchemy.Float, nullable=False),
     sqlalchemy.Column("current_price", sqlalchemy.Float, nullable=False),
     sqlalchemy.Column("current_value", sqlalchemy.Float, nullable=False),
     sqlalchemy.Column("pnl", sqlalchemy.Float, nullable=False),
+    sqlalchemy.Column("date_time", sqlalchemy.DateTime, nullable=False),
 )
 
 trades_table = sqlalchemy.Table( # These can be imported by another script
     "trades",
     metadata,
-    sqlalchemy.Column("trade_id", sqlalchemy.Integer, primary_key=True, autoincrement=True),
+    sqlalchemy.Column("trade_id", sqlalchemy.String, primary_key=True, autoincrement=True),
     sqlalchemy.Column("type", sqlalchemy.String, nullable=False),
     sqlalchemy.Column("position_id", sqlalchemy.Integer, nullable=False),
     sqlalchemy.Column("date_time", sqlalchemy.DateTime, nullable=False),
@@ -37,6 +38,12 @@ trades_table = sqlalchemy.Table( # These can be imported by another script
     sqlalchemy.Column("price", sqlalchemy.Float, nullable=False),
     sqlalchemy.Column("value", sqlalchemy.Float, nullable=False),
     sqlalchemy.Column("realized_pnl", sqlalchemy.Float, nullable=False),
+)
+
+cash_table = sqlalchemy.Table(
+    "cash",
+    metadata,
+    sqlalchemy.Column("cash", sqlalchemy.Float, nullable=False)
 )
 
 def get_engine(db_dir: Path = DB_DIR, db_path: Path = DB_PATH) -> sqlalchemy.Engine:
@@ -129,7 +136,7 @@ def add_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping[st
 
     Example:
         >>> add_row(engine, portfolio_table, {
-        ...     "position_id": 1, "btc_amnt": 0.5, "open_price": 40000,
+        ...     "position_id": "P_1", "btc_amnt": 0.5, "open_price": 40000,
         ...     "current_price": 41000, "current_value": 20500, "pnl": 500,
         ... })
     """
@@ -148,8 +155,8 @@ def modify_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping
     keys are updated, so omitted columns retain their current values.
 
     Example:
-        >>> modify_row(engine, portfolio_table, {"position_id": 1, "pnl": 750})
-        >>> modify_row(engine, trades_table, {"trade_id": 1, "value": 21000})
+        >>> modify_row(engine, portfolio_table, {"position_id": "P_1", "pnl": 750})
+        >>> modify_row(engine, trades_table, {"trade_id": "T_1", "value": 21000})
     """
     primary_key_columns = list(table.primary_key.columns)
     if len(primary_key_columns) != 1:
@@ -182,8 +189,8 @@ def remove_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping
     """Delete one row using its primary key and commit the transaction.
 
     Example:
-        >>> remove_row(engine, portfolio_table, {"position_id": 1})
-        >>> remove_row(engine, trades_table, {"trade_id": 1})
+        >>> remove_row(engine, portfolio_table, {"position_id": "P_1"})
+        >>> remove_row(engine, trades_table, {"trade_id": "T_1"})
     """
     primary_key_columns = list(table.primary_key.columns)
     if len(primary_key_columns) != 1:

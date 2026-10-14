@@ -1,6 +1,6 @@
 # Backend which orchestrates the overall agent. It is run every hour, being invoked according to timer logic in 'timer.py' (this directory)
 
-from src.price_data import fetch_live_BTCUSD
+from src.price_data import fetch_live_BTCUSD, fetch_historical_BTCUSD
 from src.news import fetch_news_articles
 from src.agent import run_agent
 from src.database.database import create_database, modify_row, fetch_table_data, portfolio_table, trades_table
@@ -8,11 +8,11 @@ from src.database.database import create_database, modify_row, fetch_table_data,
 def main():
 
     def return_price():
-        # Fetch latest price:
-        fetch_live_BTCUSD()
-        return None
+        current_price = fetch_live_BTCUSD() # Fetch latest price
+        three_month_data = fetch_historical_BTCUSD(period="3mo") # Historical data (for context)
+        return current_price, three_month_data
 
-    current_price = return_price()
+    current_price, three_month_data = return_price()
 
     def update_potfolio(current_price):
         """
@@ -43,15 +43,21 @@ def main():
 
     predictions = models_predict(price_features)
 
-    def ask_agent_portfolio(current_price, current_portfolio, predictions, news):
+    def ask_agent_portfolio(current_price, historical_price, current_portfolio, predictions, news):
         """
         Run the agent by providing all the information it needs to make decisions regarding portfolio management.
         """
-        context = {}
-        run_agent(api_token=None, context=context) # Imported from src.agent
-        return None
+        context = {
+            "current_price": current_price,
+            "historical_price": historical_price,
+            "current_portfolio": current_portfolio,
+            "predictions": predictions,
+            "news": news,
+        }
+        return run_agent(api_token=None, context=context) # Imported from src.agent
 
-    ask_agent_portfolio(current_price, current_portfolio, predictions, news)
+    agent_summary = ask_agent_portfolio(current_price, three_month_data, current_portfolio, predictions, news)
+    print(agent_summary)
 
 
 

@@ -1,15 +1,18 @@
 btc-agent/
 │
 ├── app.py                   # Streamlit frontend
-├── main.py                  # 24/7 trading process
+├── main.py                  # 24/7 trading process (once per hour)
+├── timer.py                 # Execute main.py once per hour
 │
 ├── src/
-│   ├── market_data.py
-│   ├── features.py
+│   ├── price_data.py
 │   ├── predictions.py
-│   ├── llm_agent.py
-│   ├── portfolio.py
-│   └── telegram.py
+│   ├── agent.py
+│   ├── notification.py
+│   ├── google_sheets.py
+│   ├── news.py
+│   └── database/
+│        └── database.py
 │
 ├── models/
 │   ├── direction_model.pkl
