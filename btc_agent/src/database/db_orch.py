@@ -1,15 +1,13 @@
-# Use/test database.py functionality here
+"""Inspect and test the trading database."""
 
-# Base imports:
-import os
 from pathlib import Path
 import sqlalchemy
+from sqlalchemy.engine import Engine
+from sqlalchemy.engine.reflection import Inspector
 
-# Custom imports:
-from db_orch import get_engine
+from database import get_engine
 
-
-engine = get_engine()
-
-
-
+# Define paths:
+APP_ROOT = Path(__file__).resolve().parents[2] # APP_ROOT not PROJ_ROOT
+DB_DIR = APP_ROOT / "databases"
+DB_PATH = DB_DIR / "trading.db"
