@@ -2,16 +2,17 @@
 
 # What functionality does the agent have to be able to trade?:
     # - Inspect the current portfolio and trade history (it may have run before and not remember, so it re-orients itself through these tools every run)
-    # - Open/update/close positions in trading.db
-    # - Record executed trades in trading.db
+    # - Open/update/close positions in trading.db (each one automatically records the trade, its realised pnl, and the cash change)
     # - Send a Telegram notification when a trade is executed
 
 import os
 from datetime import datetime, timezone
 
+import sqlalchemy
 from agents import Agent, Runner, function_tool, set_default_openai_key
 
 from src.database.database import (
+    CASH_ROW_ID,
     add_row,
     fetch_table_data,
     get_engine,
@@ -25,6 +26,7 @@ from src.notification import chat_id, send_telegram_message
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = "gpt-6-luna"
+INDICATOR_DAYS = 14 # How many of the most recent daily rows (with indicators) are shown to the agent
 
 
 @function_tool
@@ -42,69 +44,171 @@ def get_trade_history() -> list[dict]:
 
 
 @function_tool
-def open_position(position_id: str, btc_amnt: float, open_price: float, current_price: float, current_value: float, pnl: float) -> str:
-    """Open a new BTC position by inserting a row into the portfolio table."""
+def get_cash() -> dict | str:
+    """Return the current cash balance and when it was last updated, from the cash table."""
     engine = get_engine()
-    add_row(engine, portfolio_table, {
-        "position_id": position_id,
-        "btc_amnt": btc_amnt,
-        "open_price": open_price,
-        "current_price": current_price,
-        "current_value": current_value,
-        "pnl": pnl,
-        "date_time": datetime.now(timezone.utc),
-    })
-    return "Position opened."
+    rows = fetch_table_data(engine, cash_table)
+    if not rows:
+        return "No cash balance has been recorded yet."
+    return {"cash": rows[0]["cash"], "date_time": rows[0]["date_time"]}
+
+
+def _cash_balance(bind: sqlalchemy.Engine | sqlalchemy.Connection) -> float | None:
+    """Return the current cash balance, or None if no balance has been recorded yet.
+
+    Example:
+        >>> _cash_balance(get_engine())
+        10000.0
+    """
+    rows = fetch_table_data(bind, cash_table)
+    return rows[0]["cash"] if rows else None
+
+
+def _set_cash(bind: sqlalchemy.Engine | sqlalchemy.Connection, cash: float) -> None:
+    """Set the single cash row to ``cash``, creating the row on the first ever update.
+
+    Example:
+        >>> _set_cash(get_engine(), 10000.0)  # e.g. to seed the starting balance
+    """
+    row = {"cash_id": CASH_ROW_ID, "cash": cash, "date_time": datetime.now(timezone.utc)}
+    try:
+        modify_row(bind, cash_table, row)
+    except LookupError: # No cash row exists yet (first ever update), so create it
+        add_row(bind, cash_table, row)
+
+
+def _record_trade(bind: sqlalchemy.Engine | sqlalchemy.Connection, trade_type: str, position_id: str, btc_amnt: float, price: float, realized_pnl: float) -> str:
+    """Record a 'buy' or 'sell' against ``position_id`` under the next unused T_n id, apply it to cash, and return the trade id.
+
+    A buy takes btc_amnt * price out of cash and a sell adds it back. Called by the open/update/close position tools,
+    so every trade is recorded and settled the same way; the agent never records trades or edits cash itself.
+
+    Example:
+        >>> _record_trade(engine, "buy", "P_1", 0.1, 60000, 0.0)
+        'T_1'
+    """
+    trade_numbers = [int(row["trade_id"][2:]) for row in fetch_table_data(bind, trades_table) if row["trade_id"].startswith("T_") and row["trade_id"][2:].isdigit()]
+    trade_id = f"T_{max(trade_numbers, default=0) + 1}"
+    value = btc_amnt * price
+    add_row(bind, trades_table, {"trade_id": trade_id, "type": trade_type, "position_id": position_id, "date_time": datetime.now(timezone.utc), "btc_amnt": btc_amnt, "price": price, "value": value, "realized_pnl": realized_pnl})
+    _set_cash(bind, (_cash_balance(bind) or 0.0) + (value if trade_type == "sell" else -value))
+    return trade_id
+
+
+def _check_buy(bind: sqlalchemy.Engine | sqlalchemy.Connection, btc_amnt: float, price: float) -> str | None:
+    """Return why a buy of ``btc_amnt`` at ``price`` can't go ahead (no balance recorded, or not enough cash), or None if it can.
+
+    Example:
+        >>> _check_buy(engine, 0.1, 60000)  # None when at least 6000 cash is available
+    """
+    cash = _cash_balance(bind)
+    if cash is None:
+        return "no cash balance has been recorded yet"
+    if btc_amnt * price > cash + 1e-9:
+        return f"buying {btc_amnt} BTC at {price:.2f} costs {btc_amnt * price:.2f} but only {cash:.2f} cash is available"
+    return None
 
 
 @function_tool
-def update_position(position_id: int, btc_amnt: float, current_price: float, current_value: float, pnl: float) -> str:
-    """Update an existing position's size and mark-to-market figures."""
-    engine = get_engine()
-    modify_row(engine, portfolio_table, {
-        "position_id": position_id,
-        "btc_amnt": btc_amnt,
-        "current_price": current_price,
-        "current_value": current_value,
-        "pnl": pnl,
-        "date_time": datetime.now(timezone.utc)
-    })
-    return f"Position {position_id} updated."
+def open_position(position_id: str, btc_amnt: float, price: float) -> str:
+    """Open a new BTC position by buying ``btc_amnt`` BTC at ``price``.
+
+    Inserts the position into the portfolio table, records the buy as a trade (next T_n id) and takes its cost out of cash.
+
+    Args:
+        position_id: Unique position label of the form "P_n" (e.g. "P_1"). Never reuse an id that appears in the trade history.
+        btc_amnt: BTC to buy (positive, e.g. 0.1).
+        price: The BTC price the trade executes at (the latest price supplied to you).
+
+    Example:
+        >>> open_position("P_1", 0.1, 60000)  # costs 6000 cash
+    """
+    with get_engine().begin() as connection: # One transaction: the position, trade, and cash rows are all written, or none are
+        # A position id is used once for the life of the portfolio. Closed positions are removed from the portfolio table, so check the trade history too
+        used_ids = {row["position_id"] for row in fetch_table_data(connection, portfolio_table)}
+        used_ids |= {row["position_id"] for row in fetch_table_data(connection, trades_table)}
+        if position_id in used_ids:
+            return f"Position not opened: {position_id} has already been used. Choose a new, unused P_n id."
+        btc_amnt = round(btc_amnt, 8) # Round to 1 satoshi (the smallest BTC unit)
+        if btc_amnt <= 0:
+            return "Position not opened: btc_amnt must be positive."
+        if reason := _check_buy(connection, btc_amnt, price):
+            return f"Position not opened: {reason}."
+
+        add_row(connection, portfolio_table, {"position_id": position_id, "btc_amnt": btc_amnt, "open_price": price, "current_price": price, "current_value": btc_amnt * price, "pnl": 0.0, "date_time": datetime.now(timezone.utc)})
+        trade_id = _record_trade(connection, "buy", position_id, btc_amnt, price, 0.0)
+        return f"Position {position_id} opened: bought {btc_amnt} BTC at {price:.2f} (trade {trade_id}). Cash is now {_cash_balance(connection):.2f}."
 
 
 @function_tool
-def close_position(position_id: str) -> str:
-    """Close a position entirely by removing it from the portfolio table."""
-    engine = get_engine()
-    remove_row(engine, portfolio_table, {"position_id": position_id})
-    return f"Position {position_id} closed."
+def update_position(position_id: str, btc_change: float, price: float) -> str:
+    """Add to (buy) or reduce (sell part of) an open position, recalculating its average entry price.
+
+    Buying more BTC (dollar cost averaging) sets open_price to the size-weighted average entry price:
+    (old_btc * old_open_price + btc_change * price) / new_btc. Selling part of a position keeps open_price
+    unchanged and realises pnl on the sold BTC: (price - open_price) * btc_sold.
+    current_price, current_value and pnl (unrealised) are then marked to the trade price.
+    The trade is recorded (next T_n id) and cash is updated automatically. To sell the whole position use close_position instead.
+
+    Args:
+        position_id: The "P_n" label of an open position.
+        btc_change: BTC bought (positive, e.g. 0.05) or sold (negative, e.g. -0.02) in this trade.
+        price: The BTC price the trade executes at (the latest price supplied to you).
+
+    Example:
+        >>> update_position("P_1", 0.1, 60000)  # P_1 held 0.1 BTC at 50000 -> 0.2 BTC at an average of 55000
+    """
+    with get_engine().begin() as connection: # One transaction: the position, trade, and cash rows are all written, or none are
+        position = next((row for row in fetch_table_data(connection, portfolio_table) if row["position_id"] == position_id), None)
+        if position is None:
+            return f"Position not updated: {position_id} is not an open position."
+        btc_change = round(btc_change, 8) # Round to 1 satoshi (the smallest BTC unit)
+        if btc_change == 0:
+            return "Position not updated: btc_change must be non-zero."
+
+        old_btc, open_price = position["btc_amnt"], position["open_price"]
+        new_btc = round(old_btc + btc_change, 8) # Round to 1 satoshi to avoid float drift such as 0.30000000000000004
+        if new_btc <= 0:
+            return f"Position not updated: {position_id} holds {old_btc} BTC, so selling {-btc_change} BTC would empty or oversell it. Use close_position to sell the whole position."
+        if btc_change > 0 and (reason := _check_buy(connection, btc_change, price)):
+            return f"Position not updated: {reason}."
+
+        realized_pnl = 0.0
+        if btc_change > 0:
+            open_price = (old_btc * open_price + btc_change * price) / new_btc
+        else:
+            realized_pnl = (price - open_price) * -btc_change
+
+        modify_row(connection, portfolio_table, {"position_id": position_id, "btc_amnt": new_btc, "open_price": open_price, "current_price": price, "current_value": new_btc * price, "pnl": (price - open_price) * new_btc, "date_time": datetime.now(timezone.utc)})
+        trade_id = _record_trade(connection, "buy" if btc_change > 0 else "sell", position_id, abs(btc_change), price, realized_pnl)
+        return f"Position {position_id} updated (trade {trade_id}): now {new_btc} BTC at an average entry price of {open_price:.2f}. Realised pnl: {realized_pnl:.2f}. Cash is now {_cash_balance(connection):.2f}."
 
 
 @function_tool
-def record_trade(trade_type: str, position_id: str, trade_id: str, btc_amnt: float, price: float, value: float, realized_pnl: float) -> str:
-    """Record an executed trade (e.g. 'buy' or 'sell') as a row in the trades table."""
-    engine = get_engine()
-    add_row(engine, trades_table, {
-        "type": trade_type,
-        "position_id": position_id,
-        "trade_id": trade_id,
-        "date_time": datetime.now(timezone.utc),
-        "btc_amnt": btc_amnt,
-        "price": price,
-        "value": value,
-        "realized_pnl": realized_pnl,
-    })
-    return "Trade recorded."
+def close_position(position_id: str, price: float) -> str:
+    """Close a position entirely by selling all of its BTC at ``price``.
 
-@function_tool
-def update_cash(cash: float) -> str:
-    """ Update the amount of cash present after a trade has been executed"""
-    engine = get_engine()
-    modify_row(engine, cash_table, {
-            "cash": cash,
-            "date_time": datetime.now(timezone.utc)
-        })
-    
+    Realises pnl on the whole position, (price - open_price) * btc_amnt, records the sell as a trade (next T_n id),
+    adds the proceeds to cash, and removes the position from the portfolio table.
+
+    Args:
+        position_id: The "P_n" label of an open position.
+        price: The BTC price the trade executes at (the latest price supplied to you).
+
+    Example:
+        >>> close_position("P_1", 70000)  # P_1 held 0.2 BTC at an average of 55000 -> realised pnl 3000, cash +14000
+    """
+    with get_engine().begin() as connection: # One transaction: the position, trade, and cash rows are all written, or none are
+        position = next((row for row in fetch_table_data(connection, portfolio_table) if row["position_id"] == position_id), None)
+        if position is None:
+            return f"Position not closed: {position_id} is not an open position."
+
+        btc_amnt = position["btc_amnt"]
+        realized_pnl = (price - position["open_price"]) * btc_amnt
+        remove_row(connection, portfolio_table, {"position_id": position_id})
+        trade_id = _record_trade(connection, "sell", position_id, btc_amnt, price, realized_pnl)
+        return f"Position {position_id} closed (trade {trade_id}): sold {btc_amnt} BTC at {price:.2f}. Realised pnl: {realized_pnl:.2f}. Cash is now {_cash_balance(connection):.2f}."
+
 
 @function_tool
 def send_trade_notification(message: str) -> str:
@@ -116,33 +220,35 @@ def send_trade_notification(message: str) -> str:
 AGENT_INSTRUCTIONS = """
 You are an autonomous BTC portfolio-management agent. You are invoked roughly once an hour and
 have no memory of previous runs other than what is stored in the database, so always start by
-calling get_portfolio and get_trade_history to see what positions you are already holding and
-what you have done before.
+calling get_portfolio, get_trade_history, and get_cash to see what positions you are already
+holding, what you have done before, and how much cash you have available.
 
 Given the latest price, recent price history, model predictions, and news context supplied in
 the prompt, decide whether to open a new position, adjust or close an existing one, or do
-nothing this cycle. Use open_position, update_position, close_position, and record_trade to make
-any change durable. Whenever a trade actually executes, call send_trade_notification with a short
+nothing this cycle. Your only trading tools are open_position, update_position, and close_position. Each one
+records the trade (with the next T_n id), calculates its realised pnl, and updates cash automatically, so you never
+record trades or edit cash yourself. Whenever a trade actually executes, call send_trade_notification with a short
 human-readable summary of what you did and why.
 
 Finish by returning a brief summary of your decision and reasoning.
 
 Some additional caveats:
-- Make sure when opening a position a consistent position_id naming schema is used e.g. P_x (make sure it is unique). The first ever position will 
-likely be P_1. Look at the trade history and positions table to understand what positions are open/closed, and the ids associated with them. It is likely that a position
-(open or closed) could have multiple trades (T_x) associated with it. Each trade should have unique id and each position should too. Again, refer to trade history to understand
-what ids have been used before.
+- When opening a position use the next unused P_n id (the first ever position is P_1). Ids are never reused, even after a
+position is closed, so check get_portfolio and get_trade_history for ids that have already been used. A position can have
+several trades (T_n) against it, e.g. its opening buy, later buys or partial sells, and its closing sell.
+
+- Dollar cost averaging is allowed: to add to or reduce an open position, call update_position with the BTC bought (positive)
+or sold (negative). It recalculates the position's average entry price. To sell a whole position, use close_position.
+
+- Buys are refused if there isn't enough cash; check get_cash before sizing a trade.
 
 - Don't hallucinate the current price. Use the BTC price provided explicitly to you.
 
+- Historical data covers roughly the last 3 months of daily prices. Technical indicators (SMA, EMA, RSI, MACD, ATR) have already been calculated on it and the most recent days are given to you in the prompt. Use these values rather than calculating your own.
 
-- When you receive historical data it will be for the last 60 days. Feel free to use this data to calculate indicators such as MACD and EMA to help you with your decision.
+- Portfolio value can be calculated by considering position values and the cash present (returned by get_cash).
 
-
-- Portfolio value can be calculated by considering position values and the cash present (in the cash table).
-
-
-- Update the cash table after trades have been executed.
+- After trades have been executed, send a Telegram message via the send_trade_notification tool you have.
 
 """
 
@@ -168,6 +274,20 @@ def _format_context(context: dict | None) -> str:
             f"max_close={historical_price['Close'].max():.2f}, "
             f"pct_change={pct_change:.2f}%"
         )
+
+        # Indicator columns are added to the history in main.py; show whichever are present for the most recent days
+        indicator_columns = [
+            column for column in historical_price.columns
+            if column.startswith(("SMA_", "EMA_", "RSI_", "MACD", "ATR_", "IDR"))
+        ]
+        if indicator_columns:
+            date_column = ["Date"] if "Date" in historical_price.columns else []
+            recent = historical_price[date_column + ["Close"] + indicator_columns].tail(INDICATOR_DAYS)
+            recent = recent.round({column: 2 for column in ["Close"] + indicator_columns})
+            sections.append(
+                f"Daily close and technical indicators (last {INDICATOR_DAYS} days, oldest first):\n"
+                f"{recent.to_string(index=False)}"
+            )
 
     predictions = context.get("predictions")
     if predictions:
@@ -206,12 +326,11 @@ def run_agent(api_token: str | None = None, context: dict | None = None) -> str:
         tools=[
             get_portfolio,
             get_trade_history,
+            get_cash,
             open_position,
             update_position,
             close_position,
-            record_trade,
             send_trade_notification,
-            update_cash
         ],
     )
 

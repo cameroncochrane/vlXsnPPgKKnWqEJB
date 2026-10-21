@@ -1,6 +1,7 @@
 """Create and access the SQLite database used by the trading agent."""
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 import sqlalchemy
@@ -30,9 +31,10 @@ portfolio_table = sqlalchemy.Table( # These can be imported by another script
 trades_table = sqlalchemy.Table( # These can be imported by another script
     "trades",
     metadata,
-    sqlalchemy.Column("trade_id", sqlalchemy.String, primary_key=True, autoincrement=True),
+    sqlalchemy.Column("trade_id", sqlalchemy.String, primary_key=True),
     sqlalchemy.Column("type", sqlalchemy.String, nullable=False),
-    sqlalchemy.Column("position_id", sqlalchemy.Integer, nullable=False),
+    # Links each trade (T_n) to its position (P_n). Not a foreign key: closed positions are removed from the portfolio table, but their trades are kept
+    sqlalchemy.Column("position_id", sqlalchemy.String, nullable=False, index=True),
     sqlalchemy.Column("date_time", sqlalchemy.DateTime, nullable=False),
     sqlalchemy.Column("btc_amnt", sqlalchemy.Float, nullable=False),
     sqlalchemy.Column("price", sqlalchemy.Float, nullable=False),
@@ -40,10 +42,14 @@ trades_table = sqlalchemy.Table( # These can be imported by another script
     sqlalchemy.Column("realized_pnl", sqlalchemy.Float, nullable=False),
 )
 
-cash_table = sqlalchemy.Table(
+CASH_ROW_ID = 1 # The cash table holds a single row (the current cash balance), always stored under this id
+
+cash_table = sqlalchemy.Table( # These can be imported by another script
     "cash",
     metadata,
-    sqlalchemy.Column("cash", sqlalchemy.Float, nullable=False)
+    sqlalchemy.Column("cash_id", sqlalchemy.Integer, primary_key=True),
+    sqlalchemy.Column("cash", sqlalchemy.Float, nullable=False),
+    sqlalchemy.Column("date_time", sqlalchemy.DateTime, nullable=False),
 )
 
 def get_engine(db_dir: Path = DB_DIR, db_path: Path = DB_PATH) -> sqlalchemy.Engine:
@@ -86,14 +92,34 @@ def create_tables(engine: sqlalchemy.Engine) -> None:
     metadata.create_all(engine)
 
 
-def fetch_table_data(engine: sqlalchemy.Engine, table: sqlalchemy.Table) -> list[dict[str, object]]:
+@contextmanager
+def _connection(bind: sqlalchemy.Engine | sqlalchemy.Connection, write: bool = True) -> Iterator[sqlalchemy.Connection]:
+    """Yield a connection for ``bind``, so the row helpers work with an engine or inside a caller's transaction.
+
+    Given an Engine, a write opens its own transaction (committed on success, rolled back on error) and a read opens a
+    plain connection. Given a Connection, it is used as is, so several helper calls share the caller's transaction and
+    commit or roll back together.
+
+    Example:
+        >>> with engine.begin() as connection:  # both rows are written, or neither
+        ...     add_row(connection, trades_table, trade)
+        ...     modify_row(connection, cash_table, cash)
+    """
+    if isinstance(bind, sqlalchemy.Connection):
+        yield bind
+    else:
+        with (bind.begin() if write else bind.connect()) as connection:
+            yield connection
+
+
+def fetch_table_data(bind: sqlalchemy.Engine | sqlalchemy.Connection, table: sqlalchemy.Table) -> list[dict[str, object]]:
     """Return all rows from ``table`` as dictionaries keyed by column name.
 
     Example:
         >>> portfolio_data = fetch_table_data(engine, portfolio_table)
         >>> process_portfolio(portfolio_data)
     """
-    with engine.connect() as connection:
+    with _connection(bind, write=False) as connection:
         rows = connection.execute(sqlalchemy.select(table)).mappings()
         return [dict(row) for row in rows]
 
@@ -106,7 +132,7 @@ def print_engine_info(engine: Engine) -> None:
         >>> print_engine_info(engine)
         Engine: sqlite:///.../trading.db
         Table: portfolio
-          - position_id (INTEGER, nullable=False, primary_key=True)
+          - position_id (VARCHAR, nullable=False, primary_key=True)
     """
     inspector: Inspector = sqlalchemy.inspect(engine)
     print(f"Engine: {engine.url}")
@@ -131,7 +157,7 @@ def print_engine_info(engine: Engine) -> None:
             )
 
 
-def add_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping[str, object]) -> None:
+def add_row(bind: sqlalchemy.Engine | sqlalchemy.Connection, table: sqlalchemy.Table, data: Mapping[str, object]) -> None:
     """Insert one dictionary of values into ``table`` and commit the transaction.
 
     Example:
@@ -144,11 +170,11 @@ def add_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping[st
     if unknown_columns:
         raise ValueError(f"Unknown columns for {table.name}: {sorted(unknown_columns)}")
 
-    with engine.begin() as connection:
+    with _connection(bind) as connection:
         connection.execute(table.insert().values(dict(data)))
 
 
-def modify_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping[str, object]) -> None:
+def modify_row(bind: sqlalchemy.Engine | sqlalchemy.Connection, table: sqlalchemy.Table, data: Mapping[str, object]) -> None:
     """Update one row using its primary key and commit the transaction.
 
     The dictionary must contain the table's primary key. All other supplied
@@ -173,7 +199,7 @@ def modify_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping
     if not updates:
         raise ValueError("At least one non-primary-key value is required for an update")
 
-    with engine.begin() as connection:
+    with _connection(bind) as connection:
         result = connection.execute(
             table.update()
             .where(table.c[primary_key] == data[primary_key])
@@ -185,7 +211,7 @@ def modify_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping
             )
 
 
-def remove_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping[str, object]) -> None:
+def remove_row(bind: sqlalchemy.Engine | sqlalchemy.Connection, table: sqlalchemy.Table, data: Mapping[str, object]) -> None:
     """Delete one row using its primary key and commit the transaction.
 
     Example:
@@ -200,7 +226,7 @@ def remove_row(engine: sqlalchemy.Engine, table: sqlalchemy.Table, data: Mapping
     if primary_key not in data:
         raise ValueError(f"Missing primary-key column for {table.name}: {primary_key}")
 
-    with engine.begin() as connection:
+    with _connection(bind) as connection:
         result = connection.execute(
             table.delete().where(table.c[primary_key] == data[primary_key])
         )
