@@ -27,6 +27,7 @@ from src.notification import chat_id, send_telegram_message
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = "gpt-6-luna"
 INDICATOR_DAYS = 14 # How many of the most recent daily rows (with indicators) are shown to the agent
+STARTING_CASH_BALANCE = float(os.getenv("STARTING_CASH_BALANCE", "100000")) # Only used the very first time the cash table is seeded
 
 
 @function_tool
@@ -75,6 +76,19 @@ def _set_cash(bind: sqlalchemy.Engine | sqlalchemy.Connection, cash: float) -> N
         modify_row(bind, cash_table, row)
     except LookupError: # No cash row exists yet (first ever update), so create it
         add_row(bind, cash_table, row)
+
+
+def seed_cash_if_empty(bind: sqlalchemy.Engine | sqlalchemy.Connection, starting_cash: float = STARTING_CASH_BALANCE) -> None:
+    """Seed the cash table with ``starting_cash`` only if no balance has ever been recorded.
+
+    A no-op once any balance exists (seeded, traded, or manually adjusted), so calling this on every
+    run_agent invocation is safe: a restart or redeploy never resets cash back to the starting balance.
+
+    Example:
+        >>> seed_cash_if_empty(get_engine())  # seeds on the very first call, a no-op afterwards
+    """
+    if _cash_balance(bind) is None:
+        _set_cash(bind, starting_cash)
 
 
 def _record_trade(bind: sqlalchemy.Engine | sqlalchemy.Connection, trade_type: str, position_id: str, btc_amnt: float, price: float, realized_pnl: float) -> str:
@@ -318,6 +332,8 @@ def run_agent(api_token: str | None = None, context: dict | None = None) -> str:
     if not token:
         raise RuntimeError("OPENAI_API_KEY environment variable is not set.")
     set_default_openai_key(token)
+
+    seed_cash_if_empty(get_engine()) # No-op after the first ever call; never resets an existing balance
 
     agent = Agent(
         name="BTC Portfolio Agent",

@@ -11,6 +11,7 @@ from src.agent import run_agent
 from src.database.database import create_database, modify_row, fetch_table_data, portfolio_table, trades_table
 from src.notification import send_email
 
+from src.paths import APP_ROOT
 
 def main():
 
@@ -104,8 +105,6 @@ def main():
     print(agent_summary)
 
     
-
-
-
 if __name__ == "__main__":
     main()
+    

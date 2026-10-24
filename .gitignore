@@ -67,6 +67,12 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# btc_agent databases (live trade/portfolio/cash data -- never commit these)
+btc_agent/databases/*.db
+btc_agent/databases/*.db-journal
+btc_agent/databases/*.db-wal
+btc_agent/databases/*.db-shm
+
 # Flask stuff:
 instance/
 .webassets-cache

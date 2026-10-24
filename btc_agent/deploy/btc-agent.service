@@ -1,0 +1,18 @@
+[Unit]
+Description=BTC trading agent (hourly scheduler)
+After=network-online.target btc-agent-secrets.service
+Requires=btc-agent-secrets.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=btc-agent
+Group=btc-agent
+WorkingDirectory=/opt/btc-agent
+EnvironmentFile=/etc/btc-agent/env
+ExecStart=/opt/btc-agent/.venv/bin/python timer.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
