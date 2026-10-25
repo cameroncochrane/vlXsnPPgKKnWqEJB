@@ -1,5 +1,6 @@
 # Backend which orchestrates the overall agent. It is run every hour, being invoked according to timer logic in 'timer.py' (this directory)
 
+import logging
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -10,8 +11,10 @@ from src.news import fetch_news_articles
 from src.agent import run_agent
 from src.database.database import create_database, modify_row, fetch_table_data, portfolio_table, trades_table
 from src.notification import send_email
+from src.logger import setup_logging
 
-from src.paths import APP_ROOT
+logger = logging.getLogger(__name__)
+
 
 def main():
 
@@ -101,10 +104,13 @@ def main():
         }
         return run_agent(api_token=None, context=context) # Imported from src.agent
 
-    agent_summary = ask_agent_portfolio(current_price, three_month_data, current_portfolio, predictions, news)
-    print(agent_summary)
+    ask_agent_portfolio(current_price, three_month_data, current_portfolio, predictions, news) # run_agent logs the agent's summary
 
     
 if __name__ == "__main__":
-    main()
-    
+    setup_logging()
+    try:
+        main()
+    except Exception:
+        logger.exception("Hourly run failed.") # Full traceback goes to logs/btc_agent.log and stderr (journalctl under systemd)
+        raise SystemExit(1)

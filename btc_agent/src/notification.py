@@ -35,8 +35,13 @@ def send_telegram_message(chat_id, message):
         "chat_id": chat_id,
         "text": message,
     }
-    response = requests.post(url, json=payload, timeout=10)
-    response.raise_for_status()
+    # SENSITIVE: the bot token is part of the URL, and requests puts the URL in its error messages, so strip it before
+    # re-raising; otherwise the token would end up in the logs. "from None" also hides the original (unredacted) exception
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as error:
+        raise RuntimeError(f"Telegram message failed: {str(error).replace(TELEGRAM_TOKEN, '<redacted>')}") from None
     return response.json()
 
 

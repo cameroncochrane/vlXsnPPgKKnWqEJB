@@ -2,6 +2,8 @@
 # the open positions and trade history from trading.db, and the latest news. Run from this directory with: streamlit run app.py
 
 # Base imports
+import logging
+
 import pandas as pd
 import streamlit as st
 from streamlit_lightweight_charts import renderLightweightCharts
@@ -11,6 +13,10 @@ from src.price_data import fetch_live_BTCUSD, fetch_historical_BTCUSD
 from src.price_indicators import add_SMA, add_EMA, add_RSI, add_MACD
 from src.news import fetch_news_articles
 from src.database.database import get_engine, fetch_table_data, portfolio_table, trades_table, cash_table
+from src.logger import setup_logging
+
+setup_logging() # Safe on every Streamlit rerun: handlers are only added once
+logger = logging.getLogger(__name__)
 
 PERIODS = ["3mo", "6mo", "1y", "2y", "5y", "max"] # Yahoo Finance lookback periods offered for the chart
 OVERLAYS = {"SMA_7": "#f59e0b", "SMA_20": "#ef4444", "EMA_7": "#3b82f6", "EMA_20": "#8b5cf6"} # Moving averages drawn on the price pane, and their colours
@@ -27,7 +33,11 @@ def load_history(period: str) -> pd.DataFrame:
         >>> history = load_history("1y")
         >>> history[["Date", "Close", "RSI_14"]].tail()
     """
-    data = fetch_historical_BTCUSD(period=period)
+    try:
+        data = fetch_historical_BTCUSD(period=period)
+    except Exception:
+        logger.exception("Couldn't load BTC-USD history for the chart (period %s).", period)
+        raise
     for n in (7, 20):
         data = add_EMA(data=add_SMA(data=data, n=n), n=n)
     return add_MACD(data=add_RSI(data=data))
@@ -40,7 +50,11 @@ def load_live_price() -> float:
     Example:
         >>> price = load_live_price()
     """
-    return float(fetch_live_BTCUSD()["Close"].iloc[0])
+    try:
+        return float(fetch_live_BTCUSD()["Close"].iloc[0])
+    except Exception:
+        logger.exception("Couldn't load the live BTC-USD price.")
+        raise
 
 
 @st.cache_data(ttl=1800, show_spinner="Loading news...")

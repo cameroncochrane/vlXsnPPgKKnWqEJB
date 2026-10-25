@@ -1,7 +1,10 @@
+import logging
 from pathlib import Path
 import pandas as pd
 import numpy as np
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 # Using yfinance API:
 
@@ -42,7 +45,7 @@ def fetch_historical_BTCUSD(period: str = "max") -> pd.DataFrame:
         data.columns = data.columns.get_level_values(0)
 
     data = data.reset_index()
-    print(f"DataFrame memory usage: {data.memory_usage(deep=True).sum() / 1024**2:.2f} MiB")
+    logger.debug("BTC-USD history memory usage: %.2f MiB", data.memory_usage(deep=True).sum() / 1024**2)
 
     return data
 

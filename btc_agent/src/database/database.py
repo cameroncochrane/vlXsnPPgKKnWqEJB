@@ -8,10 +8,7 @@ import sqlalchemy
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.reflection import Inspector
 
-
-APP_ROOT = Path(__file__).resolve().parents[2]
-DB_DIR = APP_ROOT / "databases"
-DB_PATH = DB_DIR / "trading.db"
+from src.paths import DB_DIR, DB_PATH
 
 
 metadata = sqlalchemy.MetaData()

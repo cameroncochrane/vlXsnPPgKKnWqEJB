@@ -73,6 +73,9 @@ btc_agent/databases/*.db-journal
 btc_agent/databases/*.db-wal
 btc_agent/databases/*.db-shm
 
+# btc_agent logs (rotated files such as btc_agent.log.1 aren't caught by *.log)
+btc_agent/logs/
+
 # Flask stuff:
 instance/
 .webassets-cache

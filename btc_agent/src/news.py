@@ -1,9 +1,12 @@
 # Here the logic regarding fetching bitcoin/financial/world news will be placed:
 
 # Base imports:
+import logging
 import os
 import requests
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 def fetch_news_articles(
     api_token=None,
@@ -15,6 +18,7 @@ def fetch_news_articles(
     # SENSITIVE: API key read from the environment; curly/straight quotes and whitespace are stripped (pasted keys often include them)
     api_key = (api_token or os.environ.get("NEWS_API_KEY", "")).strip().strip("\"'“”‘’").strip()
     if not api_key:
+        logger.error("NEWS_API_KEY is not set, so news can't be fetched.")
         raise SystemExit("NEWS_API_KEY is not set. Run: export NEWS_API_KEY=your_key (no quotes needed).")
 
     url = "https://newsapi.org/v2/everything"
@@ -31,34 +35,26 @@ def fetch_news_articles(
         "sortBy": "publishedAt",
         "language": "en",
         "pageSize": 20,
-        "apiKey": api_key,
     }
     if params is not None:
         request_params.update(params)
-    request_params["apiKey"] = api_key
+    request_params.pop("apiKey", None)
+    # SENSITIVE: the key goes in the X-Api-Key header, not the URL, so it never appears in request error messages or logs
+    headers = {"X-Api-Key": api_key}
 
     # 5. Execute request and process data
     try:
-        response = requests.get(url, params=request_params, timeout=15)
+        response = requests.get(url, params=request_params, headers=headers, timeout=15)
         response.raise_for_status()
         data = response.json()
 
         if data.get("status") == "ok":
             articles = data.get("articles", [])
-            print(f"Successfully fetched {len(articles)} articles for your trading agent:\n")
-            for idx, article in enumerate(articles, 1):
-                source = article.get("source", {}).get("name", "Unknown source")
-                title = article.get("title", "No title")
-                published = article.get("publishedAt", "Unknown date")
-                url = article.get("url", "")
-
-                print(f"[{idx}] {title}")
-                print(f"Source: {source} | Published: {published}")
-                print(f"Link: {url}\n")
+            logger.info("Fetched %d news articles.", len(articles))
             return articles
 
-        print(f"API Error: {data.get('message', 'Unknown error occurrence')}")
+        logger.error("NewsAPI returned an error: %s", data.get("message", "Unknown error"))
         return []
-    except requests.exceptions.RequestException as e:
-        print(f"Network error: {e}")
+    except requests.exceptions.RequestException:
+        logger.exception("Request to NewsAPI failed (network error or rejected request).")
         return []

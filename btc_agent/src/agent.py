@@ -5,6 +5,7 @@
     # - Open/update/close positions in trading.db (each one automatically records the trade, its realised pnl, and the cash change)
     # - Send a Telegram notification when a trade is executed
 
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -27,24 +28,60 @@ from src.notification import chat_id, send_telegram_message
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = "gpt-6-luna"
 INDICATOR_DAYS = 14 # How many of the most recent daily rows (with indicators) are shown to the agent
-STARTING_CASH_BALANCE = float(os.getenv("STARTING_CASH_BALANCE", "100000")) # Only used the very first time the cash table is seeded
+STARTING_CASH_BALANCE = float(os.getenv("STARTING_CASH_BALANCE", "10000")) # $10,000. Only used the very first time the cash table is seeded
+PRICE_TOLERANCE = 0.005 # Trades are refused if the price the agent passes differs from the live price by more than this fraction (0.5%)
+
+logger = logging.getLogger(__name__)
+_live_price: float | None = None # The latest BTC price supplied by main.py for this cycle; set by run_agent and checked by the trade tools
 
 
-@function_tool
+def _log_tool_error(ctx: object, error: Exception) -> str:
+    """Log a tool failure with its full traceback, and tell the agent the tool failed without exposing internal details.
+
+    Used as every tool's failure_error_function. Without it the Agents SDK swallows the exception, so failures never reach the logs.
+    The trade tools run in a single transaction, so a failure part-way through leaves the database unchanged.
+
+    Example:
+        >>> @function_tool(failure_error_function=_log_tool_error)
+        ... def my_tool() -> str: ...
+    """
+    tool_name = getattr(ctx, "tool_name", "unknown tool")
+    logger.error("Tool %s failed: %s", tool_name, error, exc_info=error)
+    return f"The {tool_name} tool failed ({type(error).__name__}) and nothing was changed. The error has been logged; don't retry the same call this cycle."
+
+
+def _check_price(price: float) -> str | None:
+    """Return why ``price`` can't be used for a trade (it doesn't match this cycle's live price), or None if it can.
+
+    The agent passes the execution price to each trade tool; this makes sure it used the live price main.py supplied rather than
+    a stale, rounded, or invented one. Skipped when no live price has been set (e.g. when a tool is called outside run_agent).
+
+    Example:
+        >>> _check_price(82000.0)  # None if the live price is within 0.5% of 82000
+    """
+    if _live_price is None:
+        return None
+    if price <= 0 or abs(price - _live_price) / _live_price > PRICE_TOLERANCE:
+        logger.warning("Trade refused: agent passed price %.2f but the live price is %.2f.", price, _live_price)
+        return f"price {price:.2f} doesn't match the live BTC price {_live_price:.2f}. Use the latest price supplied to you"
+    return None
+
+
+@function_tool(failure_error_function=_log_tool_error)
 def get_portfolio() -> list[dict]:
     """Return every open position currently held, as rows from the portfolio table."""
     engine = get_engine()
     return fetch_table_data(engine, portfolio_table)
 
 
-@function_tool
+@function_tool(failure_error_function=_log_tool_error)
 def get_trade_history() -> list[dict]:
     """Return every trade ever executed, as rows from the trades table."""
     engine = get_engine()
     return fetch_table_data(engine, trades_table)
 
 
-@function_tool
+@function_tool(failure_error_function=_log_tool_error)
 def get_cash() -> dict | str:
     """Return the current cash balance and when it was last updated, from the cash table."""
     engine = get_engine()
@@ -123,7 +160,7 @@ def _check_buy(bind: sqlalchemy.Engine | sqlalchemy.Connection, btc_amnt: float,
     return None
 
 
-@function_tool
+@function_tool(failure_error_function=_log_tool_error)
 def open_position(position_id: str, btc_amnt: float, price: float) -> str:
     """Open a new BTC position by buying ``btc_amnt`` BTC at ``price``.
 
@@ -132,7 +169,7 @@ def open_position(position_id: str, btc_amnt: float, price: float) -> str:
     Args:
         position_id: Unique position label of the form "P_n" (e.g. "P_1"). Never reuse an id that appears in the trade history.
         btc_amnt: BTC to buy (positive, e.g. 0.1).
-        price: The BTC price the trade executes at (the latest price supplied to you).
+        price: The BTC price the trade executes at. Must be the latest price supplied to you; a trade more than 0.5% away from it is refused.
 
     Example:
         >>> open_position("P_1", 0.1, 60000)  # costs 6000 cash
@@ -143,6 +180,8 @@ def open_position(position_id: str, btc_amnt: float, price: float) -> str:
         used_ids |= {row["position_id"] for row in fetch_table_data(connection, trades_table)}
         if position_id in used_ids:
             return f"Position not opened: {position_id} has already been used. Choose a new, unused P_n id."
+        if reason := _check_price(price):
+            return f"Position not opened: {reason}."
         btc_amnt = round(btc_amnt, 8) # Round to 1 satoshi (the smallest BTC unit)
         if btc_amnt <= 0:
             return "Position not opened: btc_amnt must be positive."
@@ -151,10 +190,11 @@ def open_position(position_id: str, btc_amnt: float, price: float) -> str:
 
         add_row(connection, portfolio_table, {"position_id": position_id, "btc_amnt": btc_amnt, "open_price": price, "current_price": price, "current_value": btc_amnt * price, "pnl": 0.0, "date_time": datetime.now(timezone.utc)})
         trade_id = _record_trade(connection, "buy", position_id, btc_amnt, price, 0.0)
+        logger.info("Opened %s: bought %s BTC at %.2f (%s).", position_id, btc_amnt, price, trade_id)
         return f"Position {position_id} opened: bought {btc_amnt} BTC at {price:.2f} (trade {trade_id}). Cash is now {_cash_balance(connection):.2f}."
 
 
-@function_tool
+@function_tool(failure_error_function=_log_tool_error)
 def update_position(position_id: str, btc_change: float, price: float) -> str:
     """Add to (buy) or reduce (sell part of) an open position, recalculating its average entry price.
 
@@ -167,7 +207,7 @@ def update_position(position_id: str, btc_change: float, price: float) -> str:
     Args:
         position_id: The "P_n" label of an open position.
         btc_change: BTC bought (positive, e.g. 0.05) or sold (negative, e.g. -0.02) in this trade.
-        price: The BTC price the trade executes at (the latest price supplied to you).
+        price: The BTC price the trade executes at. Must be the latest price supplied to you; a trade more than 0.5% away from it is refused.
 
     Example:
         >>> update_position("P_1", 0.1, 60000)  # P_1 held 0.1 BTC at 50000 -> 0.2 BTC at an average of 55000
@@ -176,6 +216,8 @@ def update_position(position_id: str, btc_change: float, price: float) -> str:
         position = next((row for row in fetch_table_data(connection, portfolio_table) if row["position_id"] == position_id), None)
         if position is None:
             return f"Position not updated: {position_id} is not an open position."
+        if reason := _check_price(price):
+            return f"Position not updated: {reason}."
         btc_change = round(btc_change, 8) # Round to 1 satoshi (the smallest BTC unit)
         if btc_change == 0:
             return "Position not updated: btc_change must be non-zero."
@@ -195,10 +237,11 @@ def update_position(position_id: str, btc_change: float, price: float) -> str:
 
         modify_row(connection, portfolio_table, {"position_id": position_id, "btc_amnt": new_btc, "open_price": open_price, "current_price": price, "current_value": new_btc * price, "pnl": (price - open_price) * new_btc, "date_time": datetime.now(timezone.utc)})
         trade_id = _record_trade(connection, "buy" if btc_change > 0 else "sell", position_id, abs(btc_change), price, realized_pnl)
+        logger.info("Updated %s: %+g BTC at %.2f, realised pnl %.2f (%s).", position_id, btc_change, price, realized_pnl, trade_id)
         return f"Position {position_id} updated (trade {trade_id}): now {new_btc} BTC at an average entry price of {open_price:.2f}. Realised pnl: {realized_pnl:.2f}. Cash is now {_cash_balance(connection):.2f}."
 
 
-@function_tool
+@function_tool(failure_error_function=_log_tool_error)
 def close_position(position_id: str, price: float) -> str:
     """Close a position entirely by selling all of its BTC at ``price``.
 
@@ -207,7 +250,7 @@ def close_position(position_id: str, price: float) -> str:
 
     Args:
         position_id: The "P_n" label of an open position.
-        price: The BTC price the trade executes at (the latest price supplied to you).
+        price: The BTC price the trade executes at. Must be the latest price supplied to you; a trade more than 0.5% away from it is refused.
 
     Example:
         >>> close_position("P_1", 70000)  # P_1 held 0.2 BTC at an average of 55000 -> realised pnl 3000, cash +14000
@@ -216,15 +259,18 @@ def close_position(position_id: str, price: float) -> str:
         position = next((row for row in fetch_table_data(connection, portfolio_table) if row["position_id"] == position_id), None)
         if position is None:
             return f"Position not closed: {position_id} is not an open position."
+        if reason := _check_price(price):
+            return f"Position not closed: {reason}."
 
         btc_amnt = position["btc_amnt"]
         realized_pnl = (price - position["open_price"]) * btc_amnt
         remove_row(connection, portfolio_table, {"position_id": position_id})
         trade_id = _record_trade(connection, "sell", position_id, btc_amnt, price, realized_pnl)
+        logger.info("Closed %s: sold %s BTC at %.2f, realised pnl %.2f (%s).", position_id, btc_amnt, price, realized_pnl, trade_id)
         return f"Position {position_id} closed (trade {trade_id}): sold {btc_amnt} BTC at {price:.2f}. Realised pnl: {realized_pnl:.2f}. Cash is now {_cash_balance(connection):.2f}."
 
 
-@function_tool
+@function_tool(failure_error_function=_log_tool_error)
 def send_trade_notification(message: str) -> str:
     """Send a Telegram message, e.g. to report a trade that was just executed."""
     send_telegram_message(chat_id, message)
@@ -256,7 +302,8 @@ or sold (negative). It recalculates the position's average entry price. To sell 
 
 - Buys are refused if there isn't enough cash; check get_cash before sizing a trade.
 
-- Don't hallucinate the current price. Use the BTC price provided explicitly to you.
+- Don't hallucinate the current price. Pass the latest BTC price provided explicitly to you as the price for every trade;
+trades at a price more than 0.5% away from it are refused.
 
 - Historical data covers roughly the last 3 months of daily prices. Technical indicators (SMA, EMA, RSI, MACD, ATR) have already been calculated on it and the most recent days are given to you in the prompt. Use these values rather than calculating your own.
 
@@ -335,6 +382,12 @@ def run_agent(api_token: str | None = None, context: dict | None = None) -> str:
 
     seed_cash_if_empty(get_engine()) # No-op after the first ever call; never resets an existing balance
 
+    global _live_price
+    current_price = (context or {}).get("current_price")
+    _live_price = float(current_price["Close"].iloc[0]) if current_price is not None and not current_price.empty else None
+    if _live_price is None:
+        logger.warning("No live price was supplied, so trade prices won't be checked this cycle.")
+
     agent = Agent(
         name="BTC Portfolio Agent",
         instructions=AGENT_INSTRUCTIONS,
@@ -350,5 +403,7 @@ def run_agent(api_token: str | None = None, context: dict | None = None) -> str:
         ],
     )
 
+    logger.info("Running the agent (live price %s).", f"{_live_price:.2f}" if _live_price else "unknown")
     result = Runner.run_sync(agent, _format_context(context))
+    logger.info("Agent finished: %s", result.final_output)
     return result.final_output
