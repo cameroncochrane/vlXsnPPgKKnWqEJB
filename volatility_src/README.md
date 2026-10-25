@@ -1,1 +1,1 @@
-src folder for the volatility modelling side of the project (based on the experimentation carried out in the volatility_notebooks directory)
+This directory contains the final data-preprocessing pipeline and model training scripts for the price volatility model used by the btc_agent application.

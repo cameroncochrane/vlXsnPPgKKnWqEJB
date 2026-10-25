@@ -1,1 +1,1 @@
-src folder for the direction modelling side of the project (based on the experimentation carried out in the direction_notebooks directory)
+This directory contains the final data-preprocessing pipeline and model training scripts for the price direction model used by the btc_agent application.

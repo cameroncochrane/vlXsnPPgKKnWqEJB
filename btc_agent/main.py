@@ -5,9 +5,14 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+# Paths:
+from src.paths import DIRECTION_MODEL_DIR, VOLATILITY_MODEL_DIR
+
+# Custom modules:
 from src.price_data import fetch_live_BTCUSD, fetch_historical_BTCUSD
 from src.price_indicators import add_SMA, add_EMA, add_ranges, add_RSI, add_MACD
 from src.news import fetch_news_articles
+from src.predictions import load_preprocessor, load_keras_model
 from src.agent import run_agent
 from src.database.database import create_database, modify_row, fetch_table_data, portfolio_table, trades_table
 from src.notification import send_email
@@ -67,29 +72,36 @@ def main():
         return fetch_table_data(engine, portfolio_table)
 
     current_portfolio = update_portfolio(current_price)
-
-
-    def generate_price_features(current_price, three_month_data):
-        """
-        Select the exact columns (in training order) each ML model expects from the indicator data built by add_price_indicators.
-        The models were trained on a different column set to the one shown to the agent (e.g. dcn_20_lr_ht expects
-        Close, High, Low, Open, Volume, SMA_7, EMA_7, IDR, ATR_4, RSI_14, MACD, MACD_signal, MACD_hist, with no Date, SMA_20 or EMA_20).
-        """
-        return None
-
-    price_features = generate_price_features(current_price, three_month_data)
     news = fetch_news_articles() # Fetch the latest news articles for the LLM to use
 
-    def models_predict(price_features):
+    def models_predict(historical_data, current_price):
         """
-        Make predictions using the trained ML models and output them for the LLM to use.
+        Make predictions using the trained ML models and output them for the LLM to use. Expects current and historical price data (length of choosing).
+        We are making an inference here so it isn't expecting Direction_x (y) data, only X.
         """
-        ### Use the direction and volatility models here ###
-        predictions = {}
 
+        DIRECTION_MODEL_NAME = "process_pipeline.joblib"
+        DIRECTION_PREPROCESSOR_NAME = "model_simple.keras"
+
+        VOLATILITY_MODEL_NAME = ""
+        VOLATILITY_PREPROCESSOR_NAME = ""
+
+        d_model_path = DIRECTION_MODEL_DIR / DIRECTION_MODEL_NAME
+        d_preprocessor_path = DIRECTION_MODEL_DIR /DIRECTION_PREPROCESSOR_NAME
+        v_model_path = VOLATILITY_MODEL_DIR / VOLATILITY_MODEL_NAME
+        v_preprocessor_path = VOLATILITY_MODEL_DIR / VOLATILITY_PREPROCESSOR_NAME
+
+        # Models:
+        direction_model = load_keras_model(path=d_model_path)
+        volatility_model = load_keras_model(path=v_model_path)
+
+        # Preprocessors:
+        direction_preprocessor = load_preprocessor(path=d_preprocessor_path)
+        volatility_preprocessor = load_preprocessor(path=v_preprocessor_path)
+        
         return predictions
 
-    predictions = models_predict(price_features)
+    predictions = models_predict(three_month_data,current_price)
 
     def ask_agent_portfolio(current_price, historical_price, current_portfolio, predictions, news):
         """
