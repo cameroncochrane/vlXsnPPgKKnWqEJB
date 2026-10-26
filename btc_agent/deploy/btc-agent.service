@@ -8,11 +8,17 @@ Wants=network-online.target
 Type=simple
 User=btc-agent
 Group=btc-agent
-WorkingDirectory=/opt/btc-agent
+# The repo is cloned to /opt/btc-agent, so the app itself is in its btc_agent/ subdirectory and the venv is at the repo root
+WorkingDirectory=/opt/btc-agent/btc_agent
 EnvironmentFile=/etc/btc-agent/env
 ExecStart=/opt/btc-agent/.venv/bin/python timer.py
 Restart=always
 RestartSec=10
+# Basic hardening: no privilege escalation, a private /tmp, and /usr, /boot and /etc read-only. Within /opt, the btc-agent
+# user can only write btc_agent/databases and btc_agent/logs (see README step 4)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target

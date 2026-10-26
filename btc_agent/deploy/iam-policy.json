@@ -9,7 +9,10 @@
         "ssm:GetParameters",
         "ssm:GetParametersByPath"
       ],
-      "Resource": "arn:aws:ssm:*:*:parameter/btc-agent/*"
+      "Resource": [
+        "arn:aws:ssm:*:*:parameter/btc-agent",
+        "arn:aws:ssm:*:*:parameter/btc-agent/*"
+      ]
     },
     {
       "Sid": "DecryptBtcAgentParameters",

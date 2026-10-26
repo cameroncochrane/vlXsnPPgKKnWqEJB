@@ -1,0 +1,23 @@
+[Unit]
+Description=BTC trading agent (Streamlit frontend)
+After=network-online.target btc-agent-secrets.service
+Requires=btc-agent-secrets.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=btc-agent
+Group=btc-agent
+WorkingDirectory=/opt/btc-agent/btc_agent
+EnvironmentFile=/etc/btc-agent/env
+# Headless (no browser on the server), listening on all interfaces on port 8501. Streamlit has no login, so restrict
+# port 8501 to your own IP in the instance's security group (see README)
+ExecStart=/opt/btc-agent/.venv/bin/python -m streamlit run app.py --server.headless true --server.address 0.0.0.0 --server.port 8501 --browser.gatherUsageStats false
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
