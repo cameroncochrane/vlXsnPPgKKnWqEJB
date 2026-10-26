@@ -80,14 +80,14 @@ def main():
         We are making an inference here so it isn't expecting Direction_x (y) data, only X.
         """
 
-        DIRECTION_MODEL_NAME = "process_pipeline.joblib"
-        DIRECTION_PREPROCESSOR_NAME = "model_simple.keras"
+        DIRECTION_PREPROCESSOR_NAME = "process_pipeline.joblib"
+        DIRECTION_MODEL_NAME = "model_simple.keras" 
 
         VOLATILITY_MODEL_NAME = ""
         VOLATILITY_PREPROCESSOR_NAME = ""
 
         d_model_path = DIRECTION_MODEL_DIR / DIRECTION_MODEL_NAME
-        d_preprocessor_path = DIRECTION_MODEL_DIR /DIRECTION_PREPROCESSOR_NAME
+        d_preprocessor_path = DIRECTION_MODEL_DIR / DIRECTION_PREPROCESSOR_NAME
         v_model_path = VOLATILITY_MODEL_DIR / VOLATILITY_MODEL_NAME
         v_preprocessor_path = VOLATILITY_MODEL_DIR / VOLATILITY_PREPROCESSOR_NAME
 
@@ -98,6 +98,8 @@ def main():
         # Preprocessors:
         direction_preprocessor = load_preprocessor(path=d_preprocessor_path)
         volatility_preprocessor = load_preprocessor(path=v_preprocessor_path)
+
+        # Return predictions, model name/type, and model training metrics so tthe agent can assess relaibility.
         
         return predictions
 

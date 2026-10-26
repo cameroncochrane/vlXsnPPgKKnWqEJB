@@ -19,7 +19,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from project_paths import RAW_DATA_DIR
+from notebooks.volatility_notebooks.project_paths import RAW_DATA_DIR
 
 
 # Data fetch (yfinance):
@@ -113,7 +113,7 @@ def fetch_live_BTCUSD() -> pd.DataFrame:
     }])
 
 
-# Add direction:
+# Add price direction:
 def add_direction(data: pd.DataFrame, shift: int = 1, price: str = "Close") -> pd.DataFrame:
     """Add an integer label: 1 if the future price is higher, otherwise 0.
 

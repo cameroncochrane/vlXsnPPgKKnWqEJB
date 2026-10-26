@@ -10,7 +10,7 @@ import os
 from datetime import datetime, timezone
 
 import sqlalchemy
-from agents import Agent, Runner, function_tool, set_default_openai_key
+from agents import Agent, MaxTurnsExceeded, Runner, function_tool, set_default_openai_key
 
 from src.database.database import (
     CASH_ROW_ID,
@@ -30,6 +30,9 @@ MODEL = "gpt-6-luna"
 INDICATOR_DAYS = 14 # How many of the most recent daily rows (with indicators) are shown to the agent
 STARTING_CASH_BALANCE = float(os.getenv("STARTING_CASH_BALANCE", "10000")) # $10,000. Only used the very first time the cash table is seeded
 PRICE_TOLERANCE = 0.005 # Trades are refused if the price the agent passes differs from the live price by more than this fraction (0.5%)
+MAX_TRADE_FRACTION = 0.10 # A single buy can cost at most this fraction (10%) of total portfolio value (cash + open BTC at the trade price)
+TRADE_HISTORY_LIMIT = 50 # get_trade_history shows the agent only this many of the most recent trades, so the prompt doesn't grow every hour
+MAX_TURNS = 15 # Most model calls one hourly run may make; a normal cycle needs about 4-6 (see run_agent)
 
 logger = logging.getLogger(__name__)
 _live_price: float | None = None # The latest BTC price supplied by main.py for this cycle; set by run_agent and checked by the trade tools
@@ -75,10 +78,22 @@ def get_portfolio() -> list[dict]:
 
 
 @function_tool(failure_error_function=_log_tool_error)
-def get_trade_history() -> list[dict]:
-    """Return every trade ever executed, as rows from the trades table."""
+def get_trade_history() -> dict:
+    """Return the most recent trades (at most 50, oldest first), plus totals from the full history.
+
+    Only the last TRADE_HISTORY_LIMIT trades are returned so the prompt doesn't grow every hour. Because older position ids
+    drop out of that window, it also returns next_position_id (the next unused P_n) and the all-time trade count and realised pnl.
+
+    Example:
+        >>> get_trade_history()
+        {'recent_trades': [...], 'total_trades': 120, 'total_realized_pnl': 431.5, 'next_position_id': 'P_38'}
+    """
     engine = get_engine()
-    return fetch_table_data(engine, trades_table)
+    trades = fetch_table_data(engine, trades_table)
+    positions = fetch_table_data(engine, portfolio_table)
+    trades.sort(key=lambda row: int(row["trade_id"][2:]) if row["trade_id"][2:].isdigit() else 0) # T_n order is execution order
+    used = [int(pid[2:]) for pid in {row["position_id"] for row in trades + positions} if pid.startswith("P_") and pid[2:].isdigit()]
+    return {"recent_trades": trades[-TRADE_HISTORY_LIMIT:], "total_trades": len(trades), "total_realized_pnl": sum(row["realized_pnl"] for row in trades), "next_position_id": f"P_{max(used, default=0) + 1}"}
 
 
 @function_tool(failure_error_function=_log_tool_error)
@@ -147,16 +162,26 @@ def _record_trade(bind: sqlalchemy.Engine | sqlalchemy.Connection, trade_type: s
 
 
 def _check_buy(bind: sqlalchemy.Engine | sqlalchemy.Connection, btc_amnt: float, price: float) -> str | None:
-    """Return why a buy of ``btc_amnt`` at ``price`` can't go ahead (no balance recorded, or not enough cash), or None if it can.
+    """Return why a buy of ``btc_amnt`` at ``price`` can't go ahead, or None if it can.
+
+    A buy is refused if no cash balance has been recorded, if it costs more than the cash available, or if it costs more than
+    MAX_TRADE_FRACTION (10%) of total portfolio value: cash plus every open position valued at ``price``. Only buys are limited,
+    so the agent can always sell or close a position, however large it has become.
 
     Example:
-        >>> _check_buy(engine, 0.1, 60000)  # None when at least 6000 cash is available
+        >>> _check_buy(engine, 0.01, 80000)  # None if 800 is affordable and at most 10% of portfolio value
     """
     cash = _cash_balance(bind)
     if cash is None:
         return "no cash balance has been recorded yet"
-    if btc_amnt * price > cash + 1e-9:
-        return f"buying {btc_amnt} BTC at {price:.2f} costs {btc_amnt * price:.2f} but only {cash:.2f} cash is available"
+    cost = btc_amnt * price
+    if cost > cash + 1e-9:
+        return f"buying {btc_amnt} BTC at {price:.2f} costs {cost:.2f} but only {cash:.2f} cash is available"
+    portfolio_value = cash + sum(row["btc_amnt"] * price for row in fetch_table_data(bind, portfolio_table))
+    max_cost = MAX_TRADE_FRACTION * portfolio_value
+    if cost > max_cost + 1e-9:
+        logger.warning("Trade refused: buy of %.2f is over the %.0f%% limit (%.2f of %.2f portfolio value).", cost, MAX_TRADE_FRACTION * 100, max_cost, portfolio_value)
+        return f"buying {btc_amnt} BTC at {price:.2f} costs {cost:.2f}, over the {MAX_TRADE_FRACTION:.0%} limit of {max_cost:.2f} (portfolio value {portfolio_value:.2f}). The most you can buy in one trade is {max_cost / price:.8f} BTC"
     return None
 
 
@@ -285,22 +310,23 @@ holding, what you have done before, and how much cash you have available.
 
 Given the latest price, recent price history, model predictions, and news context supplied in
 the prompt, decide whether to open a new position, adjust or close an existing one, or do
-nothing this cycle. Your only trading tools are open_position, update_position, and close_position. Each one
-records the trade (with the next T_n id), calculates its realised pnl, and updates cash automatically, so you never
-record trades or edit cash yourself. Whenever a trade actually executes, call send_trade_notification with a short
+nothing this cycle. Whenever a trade actually executes, call send_trade_notification with a short
 human-readable summary of what you did and why.
 
 Finish by returning a brief summary of your decision and reasoning.
 
 Some additional caveats:
-- When opening a position use the next unused P_n id (the first ever position is P_1). Ids are never reused, even after a
-position is closed, so check get_portfolio and get_trade_history for ids that have already been used. A position can have
-several trades (T_n) against it, e.g. its opening buy, later buys or partial sells, and its closing sell.
+- When opening a position use the next_position_id returned by get_trade_history (the first ever position is P_1). Ids are
+never reused, even after a position is closed. get_trade_history only lists the last 50 trades, so rely on next_position_id
+rather than working the next id out yourself. A position can have several trades (T_n) against it, e.g. its opening buy,
+later buys or partial sells, and its closing sell.
 
 - Dollar cost averaging is allowed: to add to or reduce an open position, call update_position with the BTC bought (positive)
 or sold (negative). It recalculates the position's average entry price. To sell a whole position, use close_position.
 
-- Buys are refused if there isn't enough cash; check get_cash before sizing a trade.
+- Buys are refused if there isn't enough cash, or if a single buy would cost more than 10% of total portfolio value (cash plus
+open positions at the current price). Size every buy within both limits; check get_cash and get_portfolio first. Sells and
+closes are never limited.
 
 - Don't hallucinate the current price. Pass the latest BTC price provided explicitly to you as the price for every trade;
 trades at a price more than 0.5% away from it are refused.
@@ -404,6 +430,12 @@ def run_agent(api_token: str | None = None, context: dict | None = None) -> str:
     )
 
     logger.info("Running the agent (live price %s).", f"{_live_price:.2f}" if _live_price else "unknown")
-    result = Runner.run_sync(agent, _format_context(context))
+    try:
+        # max_turns caps the model calls in one run, so a confused or looping agent can't run up cost or overlap the next hourly run
+        result = Runner.run_sync(agent, _format_context(context), max_turns=MAX_TURNS)
+    except MaxTurnsExceeded:
+        # Each trade tool commits on its own, so any trades made before the limit was hit are saved and consistent
+        logger.error("Agent stopped after reaching the %d-turn limit; any trades made before that are saved.", MAX_TURNS)
+        return f"Agent stopped after reaching the {MAX_TURNS}-turn limit."
     logger.info("Agent finished: %s", result.final_output)
     return result.final_output
