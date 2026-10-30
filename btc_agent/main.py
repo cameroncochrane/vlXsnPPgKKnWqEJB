@@ -35,6 +35,7 @@ def main():
         """
         Add technical indicators to the daily historical data so the agent can see them (it can't calculate them itself).
         """
+        # These indicators are for the LLM to assess. None of them are actually needed for model predictions:
         data = add_SMA(data=historical_data, n=7)
         data = add_SMA(data=data, n=20)
         data = add_EMA(data=data, n=7)
