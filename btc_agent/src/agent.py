@@ -10,7 +10,7 @@ import os
 from datetime import datetime, timezone
 
 import sqlalchemy
-from agents import Agent, MaxTurnsExceeded, Runner, function_tool, set_default_openai_key
+from agents import Agent, FunctionTool, MaxTurnsExceeded, Runner, function_tool, set_default_openai_key
 
 from src.database.database import (
     CASH_ROW_ID,
@@ -173,9 +173,11 @@ def _check_buy(bind: sqlalchemy.Engine | sqlalchemy.Connection, btc_amnt: float,
     """
     cash = _cash_balance(bind)
     if cash is None:
+        logger.warning("Trade refused: buy attempted but no cash balance has been recorded.")
         return "no cash balance has been recorded yet"
     cost = btc_amnt * price
     if cost > cash + 1e-9:
+        logger.warning("Trade refused: buy of %.2f is more than the %.2f cash available.", cost, cash)
         return f"buying {btc_amnt} BTC at {price:.2f} costs {cost:.2f} but only {cash:.2f} cash is available"
     portfolio_value = cash + sum(row["btc_amnt"] * price for row in fetch_table_data(bind, portfolio_table))
     max_cost = MAX_TRADE_FRACTION * portfolio_value
@@ -204,11 +206,13 @@ def open_position(position_id: str, btc_amnt: float, price: float) -> str:
         used_ids = {row["position_id"] for row in fetch_table_data(connection, portfolio_table)}
         used_ids |= {row["position_id"] for row in fetch_table_data(connection, trades_table)}
         if position_id in used_ids:
+            logger.warning("Trade refused: open_position used %s, which has already been used.", position_id)
             return f"Position not opened: {position_id} has already been used. Choose a new, unused P_n id."
         if reason := _check_price(price):
             return f"Position not opened: {reason}."
         btc_amnt = round(btc_amnt, 8) # Round to 1 satoshi (the smallest BTC unit)
         if btc_amnt <= 0:
+            logger.warning("Trade refused: open_position for %s had a non-positive btc_amnt (%s).", position_id, btc_amnt)
             return "Position not opened: btc_amnt must be positive."
         if reason := _check_buy(connection, btc_amnt, price):
             return f"Position not opened: {reason}."
@@ -240,16 +244,19 @@ def update_position(position_id: str, btc_change: float, price: float) -> str:
     with get_engine().begin() as connection: # One transaction: the position, trade, and cash rows are all written, or none are
         position = next((row for row in fetch_table_data(connection, portfolio_table) if row["position_id"] == position_id), None)
         if position is None:
+            logger.warning("Trade refused: update_position used %s, which is not an open position.", position_id)
             return f"Position not updated: {position_id} is not an open position."
         if reason := _check_price(price):
             return f"Position not updated: {reason}."
         btc_change = round(btc_change, 8) # Round to 1 satoshi (the smallest BTC unit)
         if btc_change == 0:
+            logger.warning("Trade refused: update_position for %s had a zero btc_change.", position_id)
             return "Position not updated: btc_change must be non-zero."
 
         old_btc, open_price = position["btc_amnt"], position["open_price"]
         new_btc = round(old_btc + btc_change, 8) # Round to 1 satoshi to avoid float drift such as 0.30000000000000004
         if new_btc <= 0:
+            logger.warning("Trade refused: selling %s BTC would empty or oversell %s, which holds %s BTC.", -btc_change, position_id, old_btc)
             return f"Position not updated: {position_id} holds {old_btc} BTC, so selling {-btc_change} BTC would empty or oversell it. Use close_position to sell the whole position."
         if btc_change > 0 and (reason := _check_buy(connection, btc_change, price)):
             return f"Position not updated: {reason}."
@@ -283,6 +290,7 @@ def close_position(position_id: str, price: float) -> str:
     with get_engine().begin() as connection: # One transaction: the position, trade, and cash rows are all written, or none are
         position = next((row for row in fetch_table_data(connection, portfolio_table) if row["position_id"] == position_id), None)
         if position is None:
+            logger.warning("Trade refused: close_position used %s, which is not an open position.", position_id)
             return f"Position not closed: {position_id} is not an open position."
         if reason := _check_price(price):
             return f"Position not closed: {reason}."
@@ -338,6 +346,23 @@ trades at a price more than 0.5% away from it are refused.
 - After trades have been executed, send a Telegram message via the send_trade_notification tool you have.
 
 """
+
+
+AGENT_TOOLS = [get_portfolio, get_trade_history, get_cash, open_position, update_position, close_position, send_trade_notification]
+
+
+def _format_tool_list(tools: list[FunctionTool]) -> str:
+    """Render the agent's tools as a list for its instructions, using each tool's name and the first line of its docstring.
+
+    Built from the same list passed to Agent(tools=...), so the instructions can't drift from the tools the agent really has.
+
+    Example:
+        >>> print(_format_tool_list([get_cash]))
+        Tools available to you (these are the only tools you have):
+        - get_cash: Return the current cash balance and when it was last updated, from the cash table.
+    """
+    lines = [f"- {tool.name}: {tool.description.splitlines()[0]}" for tool in tools]
+    return "\nTools available to you (these are the only tools you have):\n" + "\n".join(lines) + "\n"
 
 
 def _format_context(context: dict | None) -> str:
@@ -416,17 +441,9 @@ def run_agent(api_token: str | None = None, context: dict | None = None) -> str:
 
     agent = Agent(
         name="BTC Portfolio Agent",
-        instructions=AGENT_INSTRUCTIONS,
+        instructions=AGENT_INSTRUCTIONS + _format_tool_list(AGENT_TOOLS),
         model=MODEL,
-        tools=[
-            get_portfolio,
-            get_trade_history,
-            get_cash,
-            open_position,
-            update_position,
-            close_position,
-            send_trade_notification,
-        ],
+        tools=AGENT_TOOLS,
     )
 
     logger.info("Running the agent (live price %s).", f"{_live_price:.2f}" if _live_price else "unknown")

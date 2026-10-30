@@ -9,11 +9,11 @@ from pathlib import Path
 
 from src.logger import setup_logging
 from src.notification import send_email
+from src.weekly_report import build_weekly_email
 
 logger = logging.getLogger(__name__)
 
 CHECK_INTERVAL_SECONDS = 60
-weekly_update_email = ""
 
 def main():
 	script_dir = Path(__file__).resolve().parent
@@ -27,7 +27,7 @@ def main():
 			last_hour = current_hour
 			if current_hour.weekday() == 0 and current_hour.hour == 9:
 				try:
-					send_email(subject="Weekly BTC Portfolio Update", message=weekly_update_email) # Send portfolio update via email @ 9:00am every Monday
+					send_email(subject="Weekly BTC Portfolio Update", message=build_weekly_email()) # Send portfolio update via email @ 9:00am every Monday
 				except Exception: # A failed email must not stop the hourly loop
 					logger.exception("Weekly email failed.")
 			try:

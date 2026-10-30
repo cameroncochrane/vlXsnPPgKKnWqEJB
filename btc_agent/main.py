@@ -79,6 +79,8 @@ def main():
         Make predictions using the trained ML models and output them for the LLM to use. Expects current and historical price data (length of choosing).
         We are making an inference here so it isn't expecting Direction_x (y) data, only X.
         """
+
+        # Concatenate historical_data and current price into one dataframe
         
         DIRECTION_PREPROCESSOR_NAME = "process_pipeline.joblib"
         DIRECTION_MODEL_NAME = "model_simple.keras" 
@@ -99,13 +101,19 @@ def main():
         direction_preprocessor = load_preprocessor(path=d_preprocessor_path)
         volatility_preprocessor = load_preprocessor(path=v_preprocessor_path)
 
-        # Return predictions, model name/type, and model training metrics so tthe agent can assess relaibility.
-        
+        # Return predictions, model name/type, and model training metrics so the agent can assess relaibility.
+        direction_data = historical_data[["Close"]] # Direction pipeline only needs the "Close" column
+
+        volatility_data = historical_data[["Open","High","Low","Close","Volume"]].copy()
+        # Add line here to create the volatility features required to input the model e.g log returns etc
+
+        # Then feed data into pipelines, then call the models.
+
         return predictions
 
     predictions = models_predict(three_month_data,current_price)
 
-    def ask_agent_portfolio(current_price, historical_price, current_portfolio, predictions, news):
+    def ask_agent_portfolio(current_price, historical_price, current_portfolio, predictions, news, trade_history):
         """
         Run the agent by providing all the information it needs to make decisions regarding portfolio management.
         """
@@ -115,10 +123,11 @@ def main():
             "current_portfolio": current_portfolio,
             "predictions": predictions,
             "news": news,
+            "trade_history": trade_history
         }
         return run_agent(api_token=None, context=context) # Imported from src.agent
 
-    ask_agent_portfolio(current_price, three_month_data, current_portfolio, predictions, news) # run_agent logs the agent's summary
+    ask_agent_portfolio(current_price, three_month_data, current_portfolio, predictions, news, trade_history) # run_agent logs the agent's summary
 
     
 if __name__ == "__main__":
