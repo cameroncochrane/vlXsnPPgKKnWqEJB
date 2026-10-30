@@ -12,7 +12,7 @@ from src.paths import DIRECTION_MODEL_DIR, VOLATILITY_MODEL_DIR
 from src.price_data import fetch_live_BTCUSD, fetch_historical_BTCUSD
 from src.price_indicators import add_SMA, add_EMA, add_ranges, add_RSI, add_MACD
 from src.news import fetch_news_articles
-from src.predictions import load_preprocessor, load_keras_model
+from src.predictions import load_preprocessor, load_keras_model, RollingWindowTransformer # Needed for the pipeline to work correctly
 from src.agent import run_agent
 from src.database.database import create_database, modify_row, fetch_table_data, portfolio_table, trades_table
 from src.notification import send_email
@@ -79,7 +79,7 @@ def main():
         Make predictions using the trained ML models and output them for the LLM to use. Expects current and historical price data (length of choosing).
         We are making an inference here so it isn't expecting Direction_x (y) data, only X.
         """
-
+        
         DIRECTION_PREPROCESSOR_NAME = "process_pipeline.joblib"
         DIRECTION_MODEL_NAME = "model_simple.keras" 
 

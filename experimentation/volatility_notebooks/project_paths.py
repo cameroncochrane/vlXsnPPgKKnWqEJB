@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
 
-PROJ_ROOT = Path().resolve().parents[0]
+PROJ_ROOT = Path(__file__).resolve().parents[2]
 project_root = str(PROJ_ROOT)
 sys.path.insert(0, project_root)
 
@@ -14,9 +14,7 @@ DCN_DATA_DIR = PROCESSED_DATA_DIR / "direction"
 
 RAW_DATA_PATH = RAW_DATA_DIR / "btcusd_data.pkl" # Raw BTC_USD data
 
-PRE_SPLIT_DATA_DIR = DCN_DATA_DIR / "lr"
-PRE_SPLIT_DATA_LR_PATH = PRE_SPLIT_DATA_DIR / "ind_data.pkl" # Pre-split data containing indicators and 'Direction_1' label column.
-
 MODEL_DIR = PROJ_ROOT / "models"
 DCN_MODEL_DIR = MODEL_DIR / "direction"
+VOL_MODEL_DIR = MODEL_DIR / "volatility"
 

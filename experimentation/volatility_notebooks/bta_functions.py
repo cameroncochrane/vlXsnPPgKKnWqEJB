@@ -19,7 +19,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from notebooks.volatility_notebooks.project_paths import RAW_DATA_DIR
+from project_paths import RAW_DATA_DIR
 
 
 # Data fetch (yfinance):
